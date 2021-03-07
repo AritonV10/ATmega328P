@@ -1,24 +1,28 @@
-#include "stdint.h"
+/****************************************************************************************
+ * 
+ *   Author      : Ariton Viorel
+ *   Created     : 2/2/2021
+ *   Description : Header file
+ *   
+ */
 
+/*****************************************************************************************/
+/**********************************  Includes ********************************************/
+#include "InputCapture.h"
+#include "Arduino.h"
 
-#define SWM_ChangeEdgeDetection() { \
- 									\
- 	TCCR1B ^= (1u << ICES1);        \
-                                    \
- 	TIFR1 |= (1u << ICF1);          \
-                                    \
+/*****************************************************************************************/
+/******************************* Macros & Defines ****************************************/
+
+#define ICP__ChangeEdgeDetection() { \
+                                      \
+  TCCR1B ^= (1u << ICES1);           \
+                                     \
+  TIFR1 |= (1u << ICF1);             \
+                                     \
 }        
-
-typedef enum {
-  
- SWM_nenInvalid = 0,
-  
- SWM_nenHigh = 1,
-  
- SWM_nenLow  = 2
-  
-}SWM__tenPulseLevel;
-
+/*****************************************************************************************/
+/********************************* Type Definitions **************************************/
 
 typedef union {
   
@@ -30,162 +34,172 @@ typedef union {
    
     uint8_t u8High;
     
- }byte;
+ }__byte;
   
-}SWM__tstTimeStamp;
+}ICP__tstTimeStamp;
+
+typedef void(*fpCallback)(uint32_t);
+
+/*****************************************************************************************/
+/******************************* Global Variables ****************************************/
+
+static void                       *ICP__vpHighTimeCallback = NULL;
+static void                       *ICP__vpLowTimeCallback  = NULL;
+static void                       *ICP__vpPeriodCallback   = NULL;
 
 
-static volatile SWM__tenPulseLevel SWM__enCurrentPulse;
-static volatile SWM__tenPulseLevel SWM__enPreviousPulse = SWM_nenInvalid;;
-static volatile SWM__tenPulseLevel SWM__enPeriodPulse;
+static volatile ICP_tenPulseLevel  ICP__enCurrentPulse;
+static volatile ICP_tenPulseLevel  ICP__enPreviousPulse = ICP_nenInvalid;
+static volatile ICP_tenPulseLevel  ICP__enPeriodPulse;
 
-static volatile uint16_t 		   SWM__u16OverflowCounter;
+static volatile uint16_t           ICP__u16OverflowCounter;
 
-static volatile SWM__tstTimeStamp  SWM__stCapture;
+static volatile ICP__tstTimeStamp  ICP__stCapture;
 
-static volatile uint32_t 		   SWM__u32CurrentCapture;
-static volatile uint32_t           SWM__u32PreviousCapture;
+static volatile uint32_t           ICP__u32CurrentCapture;
+static volatile uint32_t           ICP__u32PreviousCapture;
 
-static volatile SWM__tstTimeStamp  SWM__stPeriodCapture;
+static volatile ICP__tstTimeStamp  ICP__stPeriodCapture;
 
 
-static volatile uint32_t u32Flag;
+/*****************************************************************************************/
+/**************************** Public Function Definitions ********************************/
 
 void 
-setup() {
-  
-  
-  
-  SWM__enCurrentPulse = SWM_nenLow;
-  
-  cli();
+ICP_vSetup(ICP_tenPulseLevel enCurrentPulse) {
+
+  ICP__enCurrentPulse = enCurrentPulse;
+
+  /* Disable interrupts */
+  noInterrupts();
   
   TCCR1A = 0;
   
-  /* No prescaler, falling edge capture*/
+  /* No prescaler, falling edge capture */
   TCCR1B = (1u << CS10);
   
   TCCR1C = 0;
   
   /* Enable overflow and ICP interrupt */
   TIMSK1 = ((1u << ICIE1) | (1u << TOIE1));
+  TIFR1  = ((1u << ICF1) | (1u << TOV1)); 
   
-  TIFR1 = ((1u << ICF1) | (1u << TOV1)); 
+  ICP__u16OverflowCounter  = 0;
   
-  TCNT1  = 0x00;
-  
-  pinMode(8, INPUT);
-  
-  /* No floating */
-  digitalWrite(8, LOW);
-  
-  sei();
-   
-  Serial.begin(9600);
-  
+  ICP__u32PreviousCapture  = 0;
+  ICP__u32CurrentCapture   = 0;
+
+  TCNT1                    = 0;
+  /* Enable interrupts */
+  interrupts();
   
 }
 
-void 
-loop() {
+void
+ICP_vRestart(void) {
   
-  if(u32Flag == 1)
-    Serial.println("High");
-  else if(u32Flag == 2)
-    Serial.println("Low");
     
-   Serial.println(SWM__enCurrentPulse);
 }
 
+void
+ICP_vStop(void) {
+  TIMSK1 = 0;
+}
+
+void
+ICP_vRegisterCallback(void *vpCallback, ICP_tenCallbackType enCallbackType) {
+  
+  if(vpCallback == NULL)
+    return;
+  
+  switch(enCallbackType) {
+    
+    case ICP_nenPeriodCallback:
+      ICP__vpPeriodCallback = vpCallback;
+    break;
+    
+    case ICP_nenLowTimeCallback:
+      ICP__vpLowTimeCallback = vpCallback;
+    break;
+    
+    case ICP_nenHighTimeCallback:
+      ICP__vpHighTimeCallback = vpCallback;
+    break;
+  }
+}
 
 ISR(TIMER1_OVF_vect) {
 
-  ++SWM__u16OverflowCounter;
-  
-  TCNT1 = 0x00;
+  ++ICP__u16OverflowCounter;
+  TCNT1  = 0;
 }
 
 ISR(TIMER1_CAPT_vect) {
-  
-  /* Capture the ticks */
-  SWM__stCapture.byte.u8Low  = ICR1L;
-  SWM__stCapture.byte.u8High = ICR1H;
-  
-  if(SWM__u16OverflowCounter > 0) {
-    
-  	SWM__u32CurrentCapture = (((uint32_t)(SWM__u16OverflowCounter << 16)) + SWM__stCapture.u16Ticks);  
 
-    /* Reset the overflow counter as we included it in the calculation */ 
-    SWM__u16OverflowCounter = 0;
+
+  /*
+   * C1 - Current
+   * C2 - Previous
+   *   
+   * |---|_____|----|___
+   *     FE   RE    FE
+   * 
+   * F1(1) = Capture time stamp and store it C2 = C1
+   * RE    = Capture timp stamp and call [Low Time] callback with (C1 - C2) and signal for a reset
+   * FE(2) = Capture timp stamp--the ICP register was reset at RE so It starts counting from 0-- and call [High Time] callback, store C2 = C1
+   */
+  uint32_t u32Overflow;
   
-   }
+  u32Overflow                  = ICP__u16OverflowCounter;
+  /* Capture the ticks */
+  ICP__stCapture.__byte.u8Low  = ICR1L;
+  ICP__stCapture.__byte.u8High = ICR1H;
   
+  /* Check for missed overflow */
+  if((TIFR1 & bit(TOV1)) && (ICP__stCapture.u16Ticks < 0x7FFFu))
+      ++u32Overflow;
+      
+  ICP__u32CurrentCapture = (uint32_t)((uint32_t)(u32Overflow << 16u) + ICP__stCapture.u16Ticks); 
   
   /* Check if It's the first capture */
-  if(SWM__enPreviousPulse != 0) {
+  if(ICP__enPreviousPulse != ICP_nenInvalid) {
   
-    switch(SWM__enCurrentPulse) {
+    switch(ICP__enCurrentPulse) {
       
-       case SWM_nenLow:
+      case ICP_nenLow:
 
-        /* High time */
-        if(SWM__enPreviousPulse == SWM_nenHigh) {
-
-          /* Consider overflow */
-          if(SWM__u32CurrentCapture > SWM__u32PreviousCapture) {
-			
-            /* Call the high time callback */
-           
-          } else {
-
-            /* Call the high time callback */
-            
-          } 
-          
-          u32Flag = 1;
-          
-          SWM__enCurrentPulse = SWM_nenHigh;
-
+        if(ICP__u32CurrentCapture >= ICP__u32PreviousCapture) {
+          ((fpCallback)ICP__vpHighTimeCallback)(ICP__u32CurrentCapture - ICP__u32PreviousCapture);
+        } else {
+          ((fpCallback)ICP__vpHighTimeCallback)(((uint32_t)(-1) - ICP__u32PreviousCapture) + ICP__u32CurrentCapture);
         }
+       
       
         break;
 
-       case SWM_nenHigh:
-       
-      	/* High time */
-        if(SWM__enPreviousPulse == SWM_nenLow) {
+      case ICP_nenHigh:
 
-          /* Consider overflow */
-          if(SWM__u32CurrentCapture > SWM__u32PreviousCapture) {
-
-            /* Call the low time callback */
-
-          } else {
-
-            /* Call the low time callback */
-
-          } 
-          
-          u32Flag = 2;
-          
-		   SWM__enCurrentPulse = SWM_nenLow;
-          
+        /* Call the low time callback */
+        if(ICP__u32CurrentCapture >= ICP__u32PreviousCapture) {
+          ((fpCallback)ICP__vpLowTimeCallback)(ICP__u32CurrentCapture - ICP__u32PreviousCapture);
+        } else {
+          ((fpCallback)ICP__vpLowTimeCallback)(((uint32_t)(-1) - ICP__u32PreviousCapture) + ICP__u32CurrentCapture);
         }
-      
-			
+
+        /* Successful read - reset the counters */
         break;
     }
   
   }
-  
+
   /* Save the current time stamp */
-  SWM__u32PreviousCapture = SWM__u32CurrentCapture;
+  ICP__u32PreviousCapture = ICP__u32CurrentCapture;
   
-  SWM__enPreviousPulse = (SWM__tenPulseLevel)(SWM__enCurrentPulse ^ 0x00000003);
+  ICP__enPreviousPulse    = ICP__enCurrentPulse;
+
+  ICP__enCurrentPulse     = (ICP_tenPulseLevel)(ICP__enCurrentPulse ^ 0x00000003);
   
   /* Change the edge */
-  SWM_ChangeEdgeDetection();
+  ICP__ChangeEdgeDetection();  
   
-  
-}
-
+} /* InputCapture.cpp End */
