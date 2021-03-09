@@ -11,7 +11,6 @@
 #include "AM2301.h"
 #include "InputCapture.h"
 
-#include "Arduino.h"
 
 /*****************************************************************************************/
 /*********************************** Config **********************************************/
@@ -26,7 +25,7 @@
 /*
    Unit: ms [miliseconds]
 */
-#define AM2301__nRequestDataTime (2) /* ms */
+#define AM2301__nRequestDataTime (0x1F3F) /* ms */
 
 #define AM2301__nRequestDataPin  PORTB, 0x09
 
@@ -35,23 +34,28 @@
 /******************************* Macros & Defines ****************************************/
 
 
-#define AM2301__Delay1ms() { \
-  __volatile__ __asm__(      \
-    "1b: \n\t"               \
-    "ldi r16, x\n\t"         \
-    "nop \n\t"               \
-    "dec r16 \n\t"           \
-    "brne 1b"                \
-  );                         \
+/*
+ * ( (4 * 0xFFFE) + 5) * 1/16e = ~16.38ms
+ */
+#define AM2301__ASM(L) #L
+#define AM2301__BlockingDelay16msRel(L) {     \
+    __asm__ __volatile__(                     \ 
+      "ldi r25, hi8("AM2301__ASM(L)")" "\n\t" \
+      "ldi r24, lo8("AM2301__ASM(L)")" "\n\t" \
+      "1:" "\n\t"                             \
+      "sbiw r24, 1" "\n\t"                    \
+      "brne 1b"                               \
+      ::                                      \                      
+    );                                        \ 
 }
 
 
-#define AM2301__vRequestData(){                \
-    AM2301__DDRB = 0x01;                       \
-    AM2301__vSetPinLow(AM2301__PORTB, 0x09);   \
-    delay(AM2301__nRequestDataTime);           \
-    AM2301__vSetPinHigh(AM2301__PORTB, 0x09);  \
-    AM2301__DDRB = 0;                          \
+#define AM2301__vRequestData(){                             \
+    AM2301__DDRB |= 0x01;                                   \
+    AM2301__vSetPinLow(AM2301__PORTB, 0x09);                \ 
+    AM2301__BlockingDelay16msRel(AM2301__nRequestDataTime); \
+    AM2301__vSetPinHigh(AM2301__PORTB, 0x09);               \
+    AM2301__DDRB &= 0xFE;                                   \
   }
 
 
@@ -118,6 +122,7 @@ AM2301__i8Read(void);
 int8_t
 AM2301_i8Read(float *pfTemperature, float *pfHumidity) {
 
+  uint16_t u16Temp;
   int8_t   i8State;
 
   /* Get the frame */
@@ -136,7 +141,15 @@ AM2301_i8Read(float *pfTemperature, float *pfHumidity) {
       return (AMC2301_nParityError);
   }
 
-  *pfTemperature = AM2301__u8Conversion((AM2301__u16Temperature(AM2301__u64DataFrame) & 0x7FFFu)) / 10.0;
+  /* Debug: data gets shifted left by 1 bit */
+  u16Temp = AM2301__u8Conversion((AM2301__u16Temperature(AM2301__u64DataFrame) & 0x7FFFu));
+
+  if(u16Temp >= 500)
+    u16Temp >>= 1;
+    
+  *pfTemperature = u16Temp / 10.0;
+  
+  
   *pfHumidity    = AM2301__u8Conversion(AM2301__u16Humidity(AM2301__u64DataFrame)) / 10.0;
 
   return (AMC2301_nOk);
@@ -200,7 +213,7 @@ AM2301__i8Read(void) {
   /* Reset data */
   AM2301__u64DataFrame       = 0;
   AM2301__i8NBits            = 0;
-  ++AM2301__u8ResponseSignal = 0;
+  AM2301__u8ResponseSignal   = 0;
   AM2301__u8BitsReceivedFlag = False;
 
   /* Keep the line low for 1ms */
