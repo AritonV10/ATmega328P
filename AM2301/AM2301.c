@@ -3,7 +3,7 @@
  *   Author      : Ariton Viorel
  *   Created     : 3/2/2021
  *   Description : Implementation file
- *   
+ * 
  */
 
 /*****************************************************************************************/
@@ -25,7 +25,7 @@
 /*
    Unit: ms [miliseconds]
 */
-#define AM2301__nRequestDataTime (0x1F3F) /* ms */
+#define AM2301__nRequestDataTime (0x1F3F) /* 2 ms */
 
 #define AM2301__nRequestDataPin  PORTB, 0x09
 
@@ -162,8 +162,9 @@ AM2301_i8Read(float *pfTemperature, float *pfHumidity) {
 
 void
 AM2301__vLowTimeCallback(uint32_t u32Ticks) {
-
-  ++AM2301__u8ResponseSignal;
+  
+  if(AM2301__u8ResponseSignal <= 2u)
+    ++AM2301__u8ResponseSignal;
 }
 
 void
@@ -200,7 +201,7 @@ AM2301__vHighTimeCallback(uint32_t u32Ticks) {
 }
 
 
-
+#include "Arduino.h"
 static int8_t
 AM2301__i8Read(void) {
 
@@ -216,14 +217,22 @@ AM2301__i8Read(void) {
   AM2301__u8ResponseSignal   = 0;
   AM2301__u8BitsReceivedFlag = False;
 
-  /* Keep the line low for 1ms */
+  /* Keep the line low for 2ms */
   AM2301__vRequestData();
 
+  /* Wait ~2.4ms since it uses our 2ms request time for the response signals */
+  AM2301__BlockingDelay16msRel(0x257F);
+
+  /* Check to see if we received the signals */
+  if(AM2301__u8ResponseSignal != 3u)
+    return(AMC2301_nTimeoutError);
+   
   /* Wait until the data has been received */
   for (; AM2301__u8BitsReceivedFlag != 1u ;)
     ;
 
   ICP_vStop();
 
+  return(AMC2301_nOk);
 
 } /* AM2301.c End */
