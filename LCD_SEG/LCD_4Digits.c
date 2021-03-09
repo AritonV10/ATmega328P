@@ -11,6 +11,7 @@
 
 #include "LCD_4Digits.h"
 
+
 /*****************************************************************************************/
 /******************************* Macros & Defines ****************************************/
 
@@ -79,3 +80,4 @@ LCD_SEG__vDisplayNumber(uint8_t u8Number) {
   if (LCD_SEG__i8State == -1)
     LCD_SEG__i8State = (sizeof(LCD_SEG__au8DigitsOrder) / 2 - 1);
 }
+
