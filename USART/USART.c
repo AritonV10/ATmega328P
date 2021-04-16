@@ -1,4 +1,4 @@
-/****************************************************************************************
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      /****************************************************************************************
  * 
  *   Author      : Ariton Viorel
  *   Created     : 4/16/2021
@@ -9,8 +9,10 @@
 /*****************************************************************************************/
 /********************************** Includes *********************************************/
 
-#include "USART.h"
+#include "Arduino.h"
+#include <avr/interrupt.h>
 
+#include "USART.h"
 #include "USART_Def.h"
 
 
@@ -31,20 +33,13 @@
 #define USART__nRxBufferSize 0x20u
 #define USART__nTxBufferSize 0x20u
 
-
-#define USART__nMinBits 0x05u
-#define USART__nMaxBits 0x09u
-
-#define USART__nMinStopBits 0x01u
-#define USART__nMaxStopBits 0x02u
+#define USART__nRxRingBuf (USART__nRxBufferSize - 1u)
+#define USART__nTxRingBuf (USART__nTxBufferSize - 1u)
 
 #define USART__vDisableISR() (USART__SREG &= ~(1u << 7))
 #define USART__vEnableISR() (USART__SREG |= (1u << 7))
 
 #define USART__u32AsyncNormalBaudRate(Baud) (((uint32_t)((USART__FCLK/USART__nAsyncNormalSampling) * 1/Baud)) - 1u)
-
-
-
 
 /*****************************************************************************************/
 /**************************** Private Function Declarations ******************************/
@@ -72,11 +67,9 @@
 /*****************************************************************************************/
 /**************************** Public Function Definitions ********************************/
 
-
-
 #if USART_AsyncISR_Cfg == 1
   
-  ISR(USART0_RX_vect) {
+  ISR(USART_RX_vect) {
     
     uint8_t u8Status;
     uint8_t u8Byte;
@@ -84,11 +77,24 @@
     u8Status = USART__UCSR0A;
     u8Byte   = USART__UDR0;
         
-     /* Check for errors */
+    /* Check for errors */
+    
      
+    USART__au8RxBuffer[USART__u8RxIdxISR] = u8Byte;
+    USART__u8RxIdxISR = ((USART__u8RxIdxISR + 1u) & USART__nRxRingBuf);
      
-     USART__au8RxBuffer[USART__u8RxIdxISR] = u8Byte;
-     USART__u8RxIdxISR = ((USART__u8RxIdxISR + 1u) & (USART__nRxBufferSize - 1u));
+  }
+
+  ISR(USART_UDRE_vect) {
+    
+    /* No new data in the buffer to be sent */
+    if(USART__u8TxIdx == USART__u8TxIdxISR)
+      return;
+
+      
+    USART__UDR0 = USART__au8TxBuffer[USART__u8TxIdxISR];
+  
+    USART__u8TxIdxISR = ((USART__u8TxIdxISR + 1u) & USART__nTxRingBuf);
      
   }
 #endif
@@ -120,7 +126,7 @@
     USART__UCSR0C |= (USART_nStopBits_Cfg << USART__nUSBS0);
 
     #if USART_AsyncISR_Cfg == 1
-      USART__UCSR0B |= (1u << USART__nRXCIE0);
+      USART__UCSR0B |= (USART_nTranmission_Cfg << USART__nISR);
     #endif
 
     USART__vEnableISR();
@@ -136,14 +142,14 @@
       #if USART_AsyncISR_Cfg == 1
          
          /* Check if there is no new data received */
-         if(USART__u8RxIdx == USART__u8RxIdxISR )
+         if( USART__u8RxIdx == USART__u8RxIdxISR )
           return(USART_nError);
          
          /* Get the byte from the Rx buffer */
          u8Byte = USART__au8RxBuffer[USART__u8RxIdx];
 
          /* Wraparound*/
-         USART__u8RxIdx = ((USART__u8RxIdx + 1u) & (USART__nRxBufferSize - 1u));
+         USART__u8RxIdx = ((USART__u8RxIdx + 1u) & USART__nRxRingBuf);
 
          return(u8Byte);
          
@@ -162,19 +168,36 @@
         if(u8Status & USART__nErrorMask)
           return(USART_nError);
         
-        return (u8Byte);
+        return(u8Byte);
       #endif
       
     }
     
-    void
+    int8_t
     USART_vSend(uint8_t u8Byte) {
       
-      /* Busy wait until we can place the byte into the buffer */
-      while (!(USART__UCSR0A & (1u << USART__nUDRE0)))
-        ;
-    
-      USART__UDR0 = u8Byte;
+       #if USART_AsyncISR_Cfg == 1 /* ISR enabled */
+       
+         #if USART_AsyncISR_BufferError_Cfg == 0
+          /* Check to see if the buffer is full */
+          if( USART__nTxIdx == USART__nTxIdxISR ) {
+            return(USART_nBufferFullError);
+          }    
+         #endif
+         
+         USART__au8TxBuffer[USART__u8TxIdx] = u8Byte;
+         
+         /* Inc idx */
+         USART__u8TxIdx = ((USART__u8TxIdx + 1u) & USART__nTxRingBuf);
+         
+       #else
+         /* Busy wait until we can place the byte into the buffer */
+         while (!(USART__UCSR0A & (1u << USART__nUDRE0)))
+         ;
+      
+         USART__UDR0 = u8Byte;
+       #endif
+      
     }
   #else /* 9th bit used */
     
