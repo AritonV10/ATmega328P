@@ -1,4 +1,4 @@
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      /****************************************************************************************
+/************************************************************                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      /****************************************************************************************
  * 
  *   Author      : Ariton Viorel
  *   Created     : 4/16/2021
@@ -15,6 +15,25 @@
 #include "USART.h"
 #include "USART_Def.h"
 
+
+#ifndef USART_nBaudRate_Cfg
+  #error "[USART_Err]: 'USART_nBaudRate_Cfg' not defined"
+#endif
+#if USART_nBaudRate_Cfg < 0
+  #error "[USART_Err]: 'USART_nBaudRate_Cfg' is negative"
+#endif 
+#ifndef USART_nDataBits_Cfg
+  #error "[USART_Err]: 'USART_nDataBits_Cfg' not defined"
+#endif
+#if USART_nDataBits_Cfg != USART_nDataBits5 && \
+    USART_nDataBits_Cfg != USART_nDataBits6 && \
+    USART_nDataBits_Cfg != USART_nDataBits7 && \
+    USART_nDataBits_Cfg != USART_nDataBits8 && \
+    USART_nDataBits_Cfg != USART_nDataBits9
+
+  #error "[USART_Err]: Invalid data bits"
+  
+#endif
 
 /*****************************************************************************************/
 /******************************* Macros & Defines ****************************************/
@@ -76,9 +95,11 @@
     
     u8Status = USART__UCSR0A;
     u8Byte   = USART__UDR0;
-        
-    /* Check for errors */
     
+    /* Check for errors */
+    if(u8Status & USART__nErrorMask) {
+      return;
+    }
      
     USART__au8RxBuffer[USART__u8RxIdxISR] = u8Byte;
     USART__u8RxIdxISR = ((USART__u8RxIdxISR + 1u) & USART__nRxRingBuf);
@@ -91,7 +112,7 @@
     if(USART__u8TxIdx == USART__u8TxIdxISR)
       return;
 
-      
+    
     USART__UDR0 = USART__au8TxBuffer[USART__u8TxIdxISR];
   
     USART__u8TxIdxISR = ((USART__u8TxIdxISR + 1u) & USART__nTxRingBuf);
@@ -126,7 +147,8 @@
     USART__UCSR0C |= (USART_nStopBits_Cfg << USART__nUSBS0);
 
     #if USART_AsyncISR_Cfg == 1
-      USART__UCSR0B |= (USART_nTranmission_Cfg << USART__nISR);
+      USART__UCSR0B |= (USART_nTranmission_Cfg << USART__nISREnable);
+      USART__UCSR0B |= ((USART_nTranmission_Cfg & 0x01) << USART__nUDRIE0);
     #endif
 
     USART__vEnableISR();
@@ -143,7 +165,7 @@
          
          /* Check if there is no new data received */
          if( USART__u8RxIdx == USART__u8RxIdxISR )
-          return(USART_nError);
+          return(USART_nRxError);
          
          /* Get the byte from the Rx buffer */
          u8Byte = USART__au8RxBuffer[USART__u8RxIdx];
@@ -166,7 +188,7 @@
         
         /* Check for errors */
         if(u8Status & USART__nErrorMask)
-          return(USART_nError);
+          return(USART_nRxError);
         
         return(u8Byte);
       #endif
@@ -178,9 +200,9 @@
       
        #if USART_AsyncISR_Cfg == 1 /* ISR enabled */
        
-         #if USART_AsyncISR_BufferError_Cfg == 0
+         #if USART_AsyncISR_BufferError_Cfg == 1
           /* Check to see if the buffer is full */
-          if( USART__nTxIdx == USART__nTxIdxISR ) {
+          if( ((USART__nTxIdx + 1u) & USART__nTxRingBuf) == USART__nTxIdxISR ) {
             return(USART_nBufferFullError);
           }    
          #endif
@@ -197,7 +219,8 @@
       
          USART__UDR0 = u8Byte;
        #endif
-      
+
+      return(USART_nTxOk);
     }
   #else /* 9th bit used */
     
@@ -220,7 +243,7 @@
       
       /* Check for errors */
       if(u8Status & USART__nErrorMask)
-        return(USART_nError)
+        return(USART_nRxError)
 
       u8Upper = (USART__UCSR0B & USART__nRXB90);
       
@@ -257,4 +280,4 @@
     
   }
   
-#endif
+#endif /* EOF USART.c */
