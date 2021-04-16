@@ -1,15 +1,15 @@
-/************************************************************                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      /****************************************************************************************
+/****************************************************************************************
  * 
  *   Author      : Ariton Viorel
  *   Created     : 4/16/2021
- *   Description : USART source file
- * 
+ *   Description : Source file
+ *   
  */
 
 /*****************************************************************************************/
 /********************************** Includes *********************************************/
 
-#include "Arduino.h"
+
 #include <avr/interrupt.h>
 
 #include "USART.h"
@@ -163,24 +163,24 @@
       
       #if USART_AsyncISR_Cfg == 1
          
-         /* Check if there is no new data received */
-         if( USART__u8RxIdx == USART__u8RxIdxISR )
+        /* Check if there is no new data received */
+        if( USART__u8RxIdx == USART__u8RxIdxISR )
           return(USART_nRxError);
          
-         /* Get the byte from the Rx buffer */
-         u8Byte = USART__au8RxBuffer[USART__u8RxIdx];
+        /* Get the byte from the Rx buffer */
+        u8Byte = USART__au8RxBuffer[USART__u8RxIdx];
 
-         /* Wraparound*/
-         USART__u8RxIdx = ((USART__u8RxIdx + 1u) & USART__nRxRingBuf);
+        /* Wraparound*/
+        USART__u8RxIdx = ((USART__u8RxIdx + 1u) & USART__nRxRingBuf);
 
-         return(u8Byte);
+        return(u8Byte);
          
       #else
       
         uint8_t u8Status;
         
         /* Busy wait until data is received */
-        while (!(USART__UCSR0A & (1u << USART__nRXC0)))
+        for(; !(USART__UCSR0A & (1u << USART__nRXC0)); )
           ;
         
         u8Status = USART__UCSR0A;
@@ -198,27 +198,27 @@
     int8_t
     USART_vSend(uint8_t u8Byte) {
       
-       #if USART_AsyncISR_Cfg == 1 /* ISR enabled */
-       
-         #if USART_AsyncISR_BufferError_Cfg == 1
+      #if USART_AsyncISR_Cfg == 1 /* ISR enabled */
+         
+        #if USART_AsyncISR_BufferError_Cfg == 1
           /* Check to see if the buffer is full */
-          if( ((USART__nTxIdx + 1u) & USART__nTxRingBuf) == USART__nTxIdxISR ) {
+          if( ((USART__u8TxIdx + 1u) & USART__nTxRingBuf) == USART__u8TxIdxISR ) {
             return(USART_nBufferFullError);
           }    
-         #endif
+        #endif
          
-         USART__au8TxBuffer[USART__u8TxIdx] = u8Byte;
+        USART__au8TxBuffer[USART__u8TxIdx] = u8Byte;
          
-         /* Inc idx */
-         USART__u8TxIdx = ((USART__u8TxIdx + 1u) & USART__nTxRingBuf);
+        /* Inc idx */
+        USART__u8TxIdx = ((USART__u8TxIdx + 1u) & USART__nTxRingBuf);
          
-       #else
-         /* Busy wait until we can place the byte into the buffer */
-         while (!(USART__UCSR0A & (1u << USART__nUDRE0)))
-         ;
-      
-         USART__UDR0 = u8Byte;
-       #endif
+      #else
+        /* Busy wait until we can place the byte into the buffer */
+        for(;!(USART__UCSR0A & (1u << USART__nUDRE0));)
+          ;
+         
+        USART__UDR0 = u8Byte;
+      #endif
 
       return(USART_nTxOk);
     }
@@ -232,7 +232,7 @@
       uint8_t u8Lower;
           
       /* Busy wait until data is received */
-      while (!(USART__UCSR0A & (1u << USART__nRXC0)))
+      for(;!(USART__UCSR0A & (1u << USART__nRXC0));)
         ;
       
       u8Status = USART__UCSR0A;
@@ -254,7 +254,7 @@
     USART_vSend(uint16_t u16Byte) {
       
       /* Busy wait until we can place the byte into the buffer */
-      while (!(USART__UCSR0A & (1u << USART__nUDRE0)))
+      for(;!(USART__UCSR0A & (1u << USART__nUDRE0));)
         ;
 
       /* Clear  & set the 9th bit */
@@ -270,9 +270,12 @@
   void
   USART_vSendString(uint8_t *puStr) {
     
-    for(; *puStr != 0; ++puStr)
-      USART_vSend(*puStr);
+    int8_t i8Err;
     
+    for(; *puStr != 0;) {
+      i8Err = USART_vSend(*puStr);
+      puStr += (i8Err == USART_nTxOk);
+    }
   }
 
   void
@@ -280,4 +283,4 @@
     
   }
   
-#endif /* EOF USART.c */
+#endif
